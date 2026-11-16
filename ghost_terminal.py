@@ -189,6 +189,7 @@ BACKEND_NAME, RUNTIME_LLAMA_LIB_DIR = _configure_runtime_backend()
 from llama_cpp import Llama, llama_cpp
 
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 # =====================================================================
 # CONFIGURATION
@@ -207,8 +208,32 @@ def _find_available_port(preferred: int = 5555) -> int:
     return preferred
 
 
+def _reserve_server_socket(host: str, preferred: int = 5555) -> tuple[int, socket.socket]:
+    """Bind once so another process cannot claim the chosen port before startup."""
+    explicit = os.environ.get("GHOST_API_PORT")
+    ports = [int(explicit)] if explicit is not None else range(preferred, preferred + 20)
+    last_error = None
+    for port in ports:
+        if not 1 <= port <= 65535:
+            raise ValueError("GHOST_API_PORT must be between 1 and 65535.")
+        listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            if os.name == "nt":
+                listener.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+            listener.bind((host, port))
+            listener.listen(2048)
+            return port, listener
+        except OSError as exc:
+            listener.close()
+            last_error = exc
+    raise OSError(f"Could not bind GHoSt Terminal to {host}: {last_error}") from last_error
+
+
 HOST              = "127.0.0.1"
-PORT              = _find_available_port(5555)
+if __name__ == "__main__":
+    PORT, SERVER_SOCKET = _reserve_server_socket(HOST)
+else:
+    PORT, SERVER_SOCKET = _find_available_port(5555), None
 MODEL_DIR = APP_DIR / "ghost_models"
 PIPER_MODEL_DIR = APP_DIR / "piper_models"
 SETTINGS_PATH = APP_DIR / "ghost_terminal_settings.json"
@@ -297,6 +322,26 @@ class EngineState:
         self.generation_id = 0
         self.abort_event = threading.Event()
         self._lease = threading.Lock()
+        self._operation_lock = threading.Lock()
+
+    def begin_operation(self) -> bool:
+        """Atomically reserve the model for a load, unload, or reset operation."""
+        if not self._operation_lock.acquire(blocking=False):
+            return False
+
+        with self._lease:
+            if self.busy:
+                self._operation_lock.release()
+                return False
+            self.locked = True
+
+        return True
+
+    def end_operation(self) -> None:
+        """Release the model-operation reservation."""
+        with self._lease:
+            self.locked = False
+        self._operation_lock.release()
 
     def begin_generation(self, streaming: bool) -> int:
         with self._lease:
@@ -355,14 +400,19 @@ DEFAULT_VOICE_URLS = {
 
 def _clean_text_for_speech(text: str) -> str:
     """Strip <think> blocks, code blocks, and Markdown marks so Piper speaks naturally."""
-    cleaned = re.sub(r"<think>[\s\S]*?(?:</think>|$)", "", str(text), flags=re.IGNORECASE)
-    cleaned = re.sub(r"</?think>", "", cleaned, flags=re.IGNORECASE)
+    cleaned = _strip_think_blocks(text)
     cleaned = re.sub(r"```[\s\S]*?```", " ", cleaned)
     cleaned = re.sub(r"`([^`]+)`", r"\1", cleaned)
     cleaned = re.sub(r"\*+", "", cleaned)
     cleaned = re.sub(r"(?m)^#+\s*", "", cleaned)
     cleaned = re.sub(r"\s+", " ", cleaned).strip()
     return cleaned
+
+
+def _strip_think_blocks(text: str) -> str:
+    """Remove complete or unterminated reasoning blocks and stray think tags."""
+    cleaned = re.sub(r"<think>[\s\S]*?(?:</think>|$)", "", str(text), flags=re.IGNORECASE)
+    return re.sub(r"</?think>", "", cleaned, flags=re.IGNORECASE)
 
 
 def scan_piper_voices() -> List[Dict[str, str]]:
@@ -411,11 +461,11 @@ def read_aloud(text: str, voice_name: str = "silas", play_locally: bool = True) 
     if not cleaned_text:
         raise ValueError("No speakable text in message.")
 
-    model_path = _resolve_piper_model_path(voice_name)
-    output_audio = Path(tempfile.gettempdir()) / "GHoSt-Terminal" / "current_speech.wav"
-    output_audio.parent.mkdir(parents=True, exist_ok=True)
+    output_dir = Path(tempfile.gettempdir()) / "GHoSt-Terminal"
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     with _PIPER_LOCK:
+        model_path = _resolve_piper_model_path(voice_name)
         wav_bytes: Optional[bytes] = None
         try:
             from piper import PiperVoice
@@ -437,16 +487,24 @@ def read_aloud(text: str, voice_name: str = "silas", play_locally: bool = True) 
         except Exception as exc:
             log.warning(f"In-process PiperVoice failed, trying piper CLI: {exc}")
             if not IS_FROZEN:
-                command = [sys.executable, "-m", "piper", "-m", str(model_path), "-f", str(output_audio)]
-                subprocess.run(
-                    command,
-                    input=cleaned_text,
-                    text=True,
-                    capture_output=True,
-                    creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
-                )
-                if output_audio.is_file():
-                    wav_bytes = output_audio.read_bytes()
+                with tempfile.NamedTemporaryFile(
+                    prefix="speech-", suffix=".wav", dir=output_dir, delete=False
+                ) as temp_audio:
+                    output_audio = Path(temp_audio.name)
+                try:
+                    command = [sys.executable, "-m", "piper", "-m", str(model_path), "-f", str(output_audio)]
+                    subprocess.run(
+                        command,
+                        input=cleaned_text,
+                        text=True,
+                        capture_output=True,
+                        check=True,
+                        creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+                    )
+                    if output_audio.is_file():
+                        wav_bytes = output_audio.read_bytes()
+                finally:
+                    output_audio.unlink(missing_ok=True)
 
         if not wav_bytes:
             raise RuntimeError("Piper did not produce audio output. Is piper-tts installed?")
@@ -871,17 +929,16 @@ def load_model(
     context_size: int,
     chat_format: str = "auto",
     flash_attn: bool = True,
-) -> dict:
+) -> tuple[dict, float]:
     """Unload any resident model, preflight the candidate, then load its fit."""
     if "/" in filename or "\\" in filename or ".." in filename:
         raise HTTPException(status_code=400, detail="Invalid filename.")
     path = MODEL_DIR / filename
     if not path.is_file():
         raise HTTPException(status_code=404, detail=f"Model '{filename}' not found in ./ghost_models.")
-    if STATE.locked or STATE.busy:
+    if not STATE.begin_operation():
         raise HTTPException(status_code=409, detail="A model change is already in progress.")
 
-    STATE.locked = True
     try:
         unload_current_model()
         preflight = preflight_model(filename, context_size, flash_attn=flash_attn)
@@ -923,33 +980,9 @@ def load_model(
         STATE.loaded_flash_attn = use_flash_attn
         STATE._think_handlers, STATE.prompt_opens_think = _build_think_handlers(STATE.llm)
         log.info(f"Model '{filename}' resident in VRAM. Load time: {dt:.2f}s")
-        return preflight
+        return preflight, dt
     finally:
-        STATE.locked = False
-
-# =====================================================================
-# PROMPT BUILDER — OpenAI messages -> llama.cpp chat template
-# =====================================================================
-
-def build_prompt(messages: List[Dict[str, str]]) -> str:
-    """Apply the model's native chat template with a safe fallback."""
-    try:
-        return STATE.llm.ctx.model.chat_template
-    except Exception:
-        pass
-    # Fallback manual assembly (ChatML-compatible)
-    parts = []
-    for m in messages:
-        role = m.get("role", "user")
-        content = m.get("content", "")
-        if role == "system":
-            parts.append(f"<|im_start|>system\n{content}<|im_end|>")
-        elif role == "assistant":
-            parts.append(f"<|im_start|>assistant\n{content}<|im_end|>")
-        else:
-            parts.append(f"<|im_start|>user\n{content}<|im_end|>")
-    parts.append("<|im_start|>assistant\n")
-    return "\n".join(parts)
+        STATE.end_operation()
 
 # =====================================================================
 # API SCHEMA — exact OpenAI-compatible request/response
@@ -1089,7 +1122,7 @@ def save_settings(settings: LoaderSettings) -> dict:
     return data
 
 
-app = FastAPI(title="GHoSt Terminal", version="1.0.0", docs_url=None, redoc_url=None)
+app = FastAPI(title="GHoSt Terminal", version="1.0.1", docs_url=None, redoc_url=None)
 
 
 @app.get("/")
@@ -1140,40 +1173,48 @@ def preflight_endpoint(req: PreflightRequest):
 
 @app.post("/v1/load")
 def load_endpoint(req: LoadRequest):
-    preflight = load_model(req.model, req.n_ctx, req.chat_format, flash_attn=req.flash_attn)
+    preflight, load_seconds = load_model(req.model, req.n_ctx, req.chat_format, flash_attn=req.flash_attn)
     return {
         "status": "loaded",
         "model": req.model,
-        "load_seconds": round(STATE.load_seconds, 2),
-        "gpu_layers": STATE.loaded_gpu_layers,
+        "load_seconds": round(load_seconds, 2),
+        "gpu_layers": preflight["n_gpu_layers"],
         "context": req.n_ctx,
         "kv_cache_type": preflight["kv_cache_type"],
         "chat_format": req.chat_format,
-        "flash_attn": STATE.loaded_flash_attn,
+        "flash_attn": preflight["flash_attn"],
         "preflight": preflight,
     }
 
 
 @app.post("/v1/unload")
 def unload_endpoint():
-    if STATE.locked or STATE.busy:
-        raise HTTPException(status_code=409, detail="A model change or generation is in progress.")
-    STATE.locked = True
+    if not STATE.begin_operation():
+        raise HTTPException(
+            status_code=409,
+            detail="A model change or generation is in progress.",
+        )
     try:
         unload_current_model()
     finally:
-        STATE.locked = False
+        STATE.end_operation()
     return {"status": "unloaded"}
 
 
 @app.post("/v1/reset")
 def reset_endpoint():
-    if STATE.locked or STATE.busy:
-        raise HTTPException(status_code=409, detail="Wait for the current model operation to finish.")
-    if STATE.llm is None:
-        raise HTTPException(status_code=409, detail="No model is loaded.")
-    STATE.llm.reset()
-    return {"status": "reset", "model": STATE.loaded_model}
+    if not STATE.begin_operation():
+        raise HTTPException(
+            status_code=409,
+            detail="Wait for the current model operation to finish.",
+        )
+    try:
+        if STATE.llm is None:
+            raise HTTPException(status_code=409, detail="No model is loaded.")
+        STATE.llm.reset()
+        return {"status": "reset", "model": STATE.loaded_model}
+    finally:
+        STATE.end_operation()
 
 
 @app.get("/v1/status")
@@ -1195,11 +1236,35 @@ def status():
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    # The bundled UI is served from this exact origin.
+    allow_origins=[f"http://{HOST}:{PORT}"],
+    allow_credentials=False,
+    allow_methods=["GET", "POST"],
+    allow_headers=["Content-Type"],
 )
+
+
+class LocalOriginMiddleware:
+    """Reject cross-origin browser requests, including simple requests without preflight."""
+
+    def __init__(self, app, allowed_origin: str):
+        self.app = app
+        self.allowed_origin = allowed_origin
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http":
+            headers = scope.get("headers", [])
+            origins = [value for name, value in headers if name.lower() == b"origin"]
+            fetch_sites = [value.lower() for name, value in headers if name.lower() == b"sec-fetch-site"]
+            if any(origin != self.allowed_origin.encode("ascii") for origin in origins) or b"cross-site" in fetch_sites:
+                response = Response("Cross-origin request rejected.", status_code=403, media_type="text/plain")
+                await response(scope, receive, send)
+                return
+        await self.app(scope, receive, send)
+
+
+app.add_middleware(LocalOriginMiddleware, allowed_origin=f"http://{HOST}:{PORT}")
+app.add_middleware(TrustedHostMiddleware, allowed_hosts=[HOST])
 
 # =====================================================================
 # READ-ALOUD ENDPOINTS
@@ -1477,12 +1542,13 @@ def chat_completions(req: ChatRequest):
             raise RuntimeError("No model resident.")
         out = llm.create_chat_completion(**completion_args)
         try:
-            content = out["choices"][0]["message"]["content"]
+            message = out["choices"][0]["message"]
+            if not show_reasoning:
+                message.pop("reasoning_content", None)
+            content = message.get("content")
             if isinstance(content, str):
                 if not show_reasoning:
-                    cleaned = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
-                    if cleaned:
-                        out["choices"][0]["message"]["content"] = cleaned
+                    out["choices"][0]["message"]["content"] = _strip_think_blocks(content).strip()
                 elif prepend_open_think and not content.lstrip().lower().startswith("<think>"):
                     out["choices"][0]["message"]["content"] = "<think>\n" + content
         except (KeyError, IndexError, TypeError):
@@ -1543,14 +1609,17 @@ if __name__ == "__main__":
 
     try:
         if args.api_only:
-            uvicorn.run(
-                app,
-                host=HOST,
-                port=PORT,
-                log_level="warning",
-                access_log=False,
-                log_config=None,
+            server = uvicorn.Server(
+                uvicorn.Config(
+                    app,
+                    host=HOST,
+                    port=PORT,
+                    log_level="warning",
+                    access_log=False,
+                    log_config=None,
+                )
             )
+            server.run(sockets=[SERVER_SOCKET])
         else:
             import webview
 
@@ -1564,7 +1633,7 @@ if __name__ == "__main__":
                     log_config=None,
                 )
             )
-            server_thread = threading.Thread(target=server.run, daemon=True)
+            server_thread = threading.Thread(target=server.run, kwargs={"sockets": [SERVER_SOCKET]}, daemon=True)
             server_thread.start()
             deadline = time.monotonic() + 15
             while not server.started and server_thread.is_alive() and time.monotonic() < deadline:
@@ -1597,3 +1666,6 @@ if __name__ == "__main__":
         else:
             print(message, file=sys.stderr)
         raise
+    finally:
+        if SERVER_SOCKET is not None:
+            SERVER_SOCKET.close()

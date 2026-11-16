@@ -5,10 +5,11 @@ from __future__ import annotations
 
 import os
 import shutil
+import tempfile
 import zipfile
 from pathlib import Path
 
-VERSION = "1.0.0"
+VERSION = "1.0.1"
 ROOT = Path(__file__).resolve().parent
 
 
@@ -34,8 +35,8 @@ def link_or_copy(src: Path, dst: Path) -> None:
 
 def stage_clean_release(stage_dir: Path) -> None:
     """Create a clean first-time-user folder using hardlinks where possible."""
-    if stage_dir.exists():
-        shutil.rmtree(stage_dir, ignore_errors=True)
+    if stage_dir.is_symlink() or (stage_dir.exists() and (not stage_dir.is_dir() or any(stage_dir.iterdir()))):
+        raise FileExistsError(f"Refusing to overwrite a non-empty or linked staging path: {stage_dir}")
     stage_dir.mkdir(parents=True, exist_ok=True)
 
     exe_path = ROOT / "GHoSt-Terminal.exe"
@@ -88,26 +89,30 @@ def stage_clean_release(stage_dir: Path) -> None:
 
 def build_release_zip(stage_dir: Path, zip_path: Path) -> None:
     """Create the distributable Windows release .zip from the staged directory."""
-    if zip_path.exists():
-        zip_path.unlink()
-    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
-        for file_path in sorted(stage_dir.rglob("*")):
-            if file_path.is_dir():
-                continue
-            if file_path.suffix.lower() in (".gguf", ".old", ".log", ".onnx", ".wav"):
-                continue
-            if file_path.name.endswith(".onnx.json") or file_path.name.startswith("ghost_terminal_settings"):
-                continue
-            rel = file_path.relative_to(stage_dir)
-            zf.write(file_path, str(Path("GHoSt-Terminal") / rel))
+    with tempfile.NamedTemporaryFile(prefix="ghost-release-", suffix=".zip", dir=zip_path.parent, delete=False) as temp_file:
+        temporary_zip = Path(temp_file.name)
+    try:
+        with zipfile.ZipFile(temporary_zip, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
+            for file_path in sorted(stage_dir.rglob("*")):
+                if file_path.is_dir():
+                    continue
+                if file_path.suffix.lower() in (".gguf", ".old", ".log", ".onnx", ".wav"):
+                    continue
+                if file_path.name.endswith(".onnx.json") or file_path.name.startswith("ghost_terminal_settings"):
+                    continue
+                rel = file_path.relative_to(stage_dir)
+                zf.write(file_path, str(Path("GHoSt-Terminal") / rel))
+        os.replace(temporary_zip, zip_path)
+    finally:
+        temporary_zip.unlink(missing_ok=True)
 
 
 if __name__ == "__main__":
-    stage = ROOT.parent / "GHoSt-Terminal-Release"
-    print(f"Staging clean release folder at: {stage}")
-    stage_clean_release(stage)
-
     release_zip = ROOT.parent / f"GHoSt-Terminal-v{VERSION}-win64.zip"
-    print(f"Packaging distributable release archive: {release_zip} ...")
-    build_release_zip(stage, release_zip)
+    with tempfile.TemporaryDirectory(prefix="ghost-release-stage-", dir=ROOT.parent) as stage_dir:
+        stage = Path(stage_dir)
+        print(f"Staging clean release folder at: {stage}")
+        stage_clean_release(stage)
+        print(f"Packaging distributable release archive: {release_zip} ...")
+        build_release_zip(stage, release_zip)
     print(f"Done! Release zip: {release_zip} ({release_zip.stat().st_size / (1024 ** 2):.1f} MB)")
