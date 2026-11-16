@@ -31,7 +31,7 @@
 
 ### Option A: Download the Standalone Windows Release (Recommended)
 
-1. Download and extract **`GHoSt-Terminal-v1.0.0-win64.zip`** from Releases.
+1. Download and extract **`GHoSt-Terminal-v1.0.1-win64.zip`** from Releases.
 2. Copy one or more `.gguf` model files into the extracted `ghost_models/` folder.
 3. Double-click **`GHoSt-Terminal.exe`**.
 4. In **[ CONFIG ]**, select your model, click **CHECK FIT** (optional) and **MOUNT**, then click **CLOSE** (or **SAVE SETTINGS & CLOSE**) to start chatting.
@@ -72,13 +72,19 @@ python build_terminal.py
 
 `build_terminal.py` automatically switches to `./.venv` if present and requires CUDA `llama-cpp-python` (`ggml-cuda.dll` + `cublas`) by default (pass `--cpu-only` if you intentionally want a CPU-only build). It outputs `GHoSt-Terminal.exe` and stages external backend DLLs into `backends/`.
 
+Run the focused regression tests without loading a model:
+
+```powershell
+python -m unittest discover -s tests -v
+```
+
 ### Create a Clean Distributable Release `.zip`
 
 ```powershell
 python package_release.py
 ```
 
-This stages a clean release directory (`../GHoSt-Terminal-Release`) and writes **`../GHoSt-Terminal-v1.0.0-win64.zip`** containing:
+This stages files in a temporary directory and writes **`../GHoSt-Terminal-v1.0.1-win64.zip`** containing:
 
 ```text
 GHoSt-Terminal/
@@ -104,6 +110,8 @@ The builder externalizes the prebuilt DLLs from `llama-cpp-python` and `nvidia-c
 ## Privacy
 
 The server binds to `127.0.0.1` only with zero telemetry. Nothing leaves your machine except the one-time download of a selected Piper voice from `rhasspy/piper-voices` on Hugging Face the first time you click the speaker button.
+
+Browser requests from other origins are rejected. The local API is not authenticated, so other programs running on the same machine can still access it; only run trusted local software while it is active.
 
 ## License
 

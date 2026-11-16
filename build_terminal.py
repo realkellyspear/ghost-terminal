@@ -14,6 +14,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -128,60 +129,51 @@ def build(allow_cpu_only: bool = False) -> None:
             f"({sys.executable}). Activate/use .venv with CUDA llama-cpp-python, or pass --cpu-only."
         )
 
-    workpath = HERE / "build_terminal"
     output = HERE / "GHoSt-Terminal.exe"
-    old_output = HERE / "GHoSt-Terminal.old.exe"
-    if old_output.exists():
-        try:
-            old_output.unlink()
-        except OSError:
-            pass
-    if output.exists():
-        try:
-            output.unlink()
-        except OSError:
-            output.rename(old_output)
-
-    args = [
-        sys.executable, "-m", "PyInstaller",
-        "--noconfirm",
-        "--onefile",
-        "--windowed",
-        "--name", "GHoSt-Terminal",
-        "--distpath", str(HERE),
-        "--workpath", str(workpath),
-        "--specpath", str(HERE),
-        "--icon", str(icon),
-        "--add-data", f"{html};.",
-        "--add-data", f"{HERE / 'assets'};assets",
-        "--collect-submodules", "webview",
-        "--collect-submodules", "llama_cpp",
-        "--collect-submodules", "piper",
-        "--collect-data", "piper",
-        "--collect-all", "onnxruntime",
-        "--collect-data", "_sounddevice_data",
-        "--collect-binaries", "_sounddevice_data",
-        "--collect-data", "_soundfile_data",
-        "--collect-binaries", "_soundfile_data",
-        "--hidden-import", "sounddevice",
-        "--hidden-import", "soundfile",
-        "--hidden-import", "_sounddevice",
-        "--hidden-import", "_soundfile",
-        "--exclude-module", "torch",
-        "--exclude-module", "torchvision",
-        "--exclude-module", "torchaudio",
-        "--exclude-module", "scipy",
-        "--exclude-module", "sklearn",
-        "--exclude-module", "triton",
-        "--exclude-module", "bitsandbytes",
-        "--exclude-module", "pyarrow",
-        "--exclude-module", "nvidia",
-        "--hidden-import", "webview.platforms.winforms",
-        str(HERE / "ghost_terminal.py"),
-    ]
-    subprocess.check_call(args, cwd=HERE)
-    if workpath.is_dir():
-        shutil.rmtree(workpath, ignore_errors=True)
+    with tempfile.TemporaryDirectory(prefix="ghost-build-", dir=HERE) as temp_dir:
+        build_dir = Path(temp_dir)
+        args = [
+            sys.executable, "-m", "PyInstaller",
+            "--noconfirm",
+            "--onefile",
+            "--windowed",
+            "--name", "GHoSt-Terminal",
+            "--distpath", str(build_dir / "dist"),
+            "--workpath", str(build_dir / "work"),
+            "--specpath", str(build_dir),
+            "--icon", str(icon),
+            "--add-data", f"{html};.",
+            "--add-data", f"{HERE / 'assets'};assets",
+            "--collect-submodules", "webview",
+            "--collect-submodules", "llama_cpp",
+            "--collect-submodules", "piper",
+            "--collect-data", "piper",
+            "--collect-all", "onnxruntime",
+            "--collect-data", "_sounddevice_data",
+            "--collect-binaries", "_sounddevice_data",
+            "--collect-data", "_soundfile_data",
+            "--collect-binaries", "_soundfile_data",
+            "--hidden-import", "sounddevice",
+            "--hidden-import", "soundfile",
+            "--hidden-import", "_sounddevice",
+            "--hidden-import", "_soundfile",
+            "--exclude-module", "torch",
+            "--exclude-module", "torchvision",
+            "--exclude-module", "torchaudio",
+            "--exclude-module", "scipy",
+            "--exclude-module", "sklearn",
+            "--exclude-module", "triton",
+            "--exclude-module", "bitsandbytes",
+            "--exclude-module", "pyarrow",
+            "--exclude-module", "nvidia",
+            "--hidden-import", "webview.platforms.winforms",
+            str(HERE / "ghost_terminal.py"),
+        ]
+        subprocess.check_call(args, cwd=HERE)
+        staged_output = build_dir / "dist" / "GHoSt-Terminal.exe"
+        if not staged_output.is_file():
+            raise FileNotFoundError(f"PyInstaller did not produce {staged_output}")
+        os.replace(staged_output, output)
     print(f"Built GHoSt Terminal: {output} ({output.stat().st_size / 1e6:.1f} MB)")
     print("Keep ghost_models and backends beside the executable. Piper voices download on first use.")
 
