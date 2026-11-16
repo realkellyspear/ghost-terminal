@@ -1,0 +1,30 @@
+# Virtual environment & Python cache
+.venv/
+__pycache__/
+*.py[cod]
+
+# Build artifacts & external native DLLs
+build_terminal/
+backends/
+dist/
+*.spec
+*.exe
+*.zip
+!assets/*
+
+# Local GGUF models (keep the folder and its README for GitHub)
+ghost_models/*
+!ghost_models/README.md
+*.gguf
+*.safetensors
+
+# Local Piper voices download on first use (keep the folder, README and model cards)
+piper_models/*.onnx
+piper_models/*.onnx.json
+!piper_models/README.md
+
+# Runtime files
+ghost_terminal_settings.json
+ghost_terminal_settings.json.tmp
+*.log
+.env

@@ -1,0 +1,1274 @@
+<!-- SPDX-FileCopyrightText: 2026 Kelly Spear -->
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="referrer" content="no-referrer">
+    <link rel="icon" type="image/png" href="/assets/ghost_favicon.png" sizes="16x16">
+    <link rel="icon" type="image/png" href="/assets/favicon-32.png" sizes="32x32">
+    <link rel="icon" type="image/x-icon" href="/assets/ghost_icon.ico">
+    <title>GHoSt Terminal</title>
+    <style>
+        :root {
+            --bg: #060c12;
+            --bg-glow: #0a1b26;
+            --panel: #0d1822;
+            --panel-raised: #12212d;
+            --line: #1f3547;
+            --cyan: #22e8f2;
+            --cyan-hover: #7af4fa;
+            --aqua: #14f0c4;
+            --navy: #04121c;
+            --cyan-glow: 0 0 16px rgba(34, 232, 242, 0.22);
+            --text: #eaf7fa;
+            --muted: #8fb0bc;
+            --ok: #14f0c4;
+            --warn: #ffc56e;
+            --danger: #ff8585;
+        }
+        * { box-sizing: border-box; }
+        *::-webkit-scrollbar { width: 8px; height: 8px; }
+        *::-webkit-scrollbar-track { background: var(--panel); }
+        *::-webkit-scrollbar-thumb { background: var(--line); border-radius: 4px; }
+        *::-webkit-scrollbar-thumb:hover { background: var(--cyan); }
+        body {
+            background: radial-gradient(ellipse at 50% -30%, var(--bg-glow) 0, var(--bg) 58%);
+            color: var(--text);
+            font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+            margin: 0;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            font-size: 14px;
+        }
+        header {
+            border-bottom: 1px solid var(--line);
+            padding: 8px 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 12px;
+            flex-wrap: wrap;
+            background: rgba(7, 14, 20, 0.94);
+        }
+        .brand { display: flex; align-items: center; gap: 12px; }
+        .brand img { height: 52px; width: auto; object-fit: contain; }
+        .header-controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+        #status-indicator { color: var(--muted); font-size: 12.5px; font-weight: 600; }
+        button {
+            background: linear-gradient(135deg, var(--cyan), var(--aqua));
+            color: var(--navy);
+            border: 1px solid var(--cyan);
+            border-radius: 7px;
+            padding: 8px 13px;
+            cursor: pointer;
+            font-family: inherit;
+            font-weight: 700;
+            font-size: 13px;
+            transition: 0.2s;
+        }
+        button:hover:not(:disabled) {
+            background: linear-gradient(135deg, var(--cyan-hover), var(--aqua));
+            border-color: var(--cyan-hover);
+            box-shadow: var(--cyan-glow);
+        }
+        button.secondary { background: transparent; color: var(--text); border-color: var(--line); }
+        button.secondary:hover:not(:disabled) {
+            border-color: var(--cyan);
+            color: var(--cyan);
+            background: rgba(34, 232, 242, 0.08);
+        }
+        button:disabled { opacity: 0.45; cursor: wait; }
+        #chat-container {
+            flex: 1;
+            overflow-y: auto;
+            width: min(1000px, calc(100% - 32px));
+            margin: 0 auto;
+            padding: 24px 0;
+            display: flex;
+            flex-direction: column;
+            gap: 14px;
+        }
+        .empty-state {
+            margin: auto;
+            text-align: center;
+            max-width: 520px;
+            padding: 28px;
+            border: 1px solid var(--line);
+            border-radius: 12px;
+            background: rgba(13, 24, 34, 0.75);
+        }
+        .empty-state img { display: block; width: min(220px, 100%); height: auto; margin: 0 auto 12px; }
+        .empty-state p { margin: 0; color: var(--muted); line-height: 1.5; }
+        .message {
+            max-width: min(82%, 760px);
+            padding: 14px 16px 10px;
+            border: 1px solid var(--line);
+            border-radius: 9px;
+            background: var(--panel);
+            line-height: 1.55;
+            overflow-wrap: anywhere;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            position: relative;
+        }
+        .message.user {
+            align-self: flex-end;
+            border-color: rgba(34, 232, 242, 0.55);
+            background: #0b2230;
+            min-width: 150px;
+        }
+        .message.ai {
+            align-self: flex-start;
+            border-left: 2px solid var(--aqua);
+            min-width: 220px;
+        }
+        .message-body { white-space: pre-wrap; overflow-wrap: anywhere; }
+        .message-body strong { color: #fff; font-weight: 700; }
+        .message-body em { color: #bdeff5; font-style: italic; }
+        .message-body code {
+            background: #0a1620;
+            border: 1px solid var(--line);
+            border-radius: 4px;
+            padding: 1px 5px;
+            font-family: Consolas, monospace;
+            font-size: 12.5px;
+        }
+        .message-body pre {
+            background: #050b10;
+            border: 1px solid var(--line);
+            border-radius: 6px;
+            padding: 10px 12px;
+            overflow-x: auto;
+            margin: 6px 0;
+        }
+        .message-actions {
+            display: flex;
+            gap: 6px;
+            justify-content: flex-end;
+            align-items: center;
+            padding-top: 4px;
+            border-top: 1px solid rgba(255, 255, 255, 0.05);
+            opacity: 0.45;
+            transition: opacity 0.15s ease;
+        }
+        .message:hover .message-actions, .message:focus-within .message-actions { opacity: 1; }
+        .message-actions.live { opacity: 1; }
+        .message.pending .message-body::after {
+            content: "\25CF";
+            color: var(--aqua);
+            margin-left: 4px;
+            animation: ghost-pulse 1s ease-in-out infinite;
+        }
+        @keyframes ghost-pulse { 0%, 100% { opacity: 0.25; } 50% { opacity: 1; } }
+        .msg-btn {
+            background: transparent;
+            color: var(--muted);
+            border: 1px solid transparent;
+            border-radius: 5px;
+            padding: 3px 8px;
+            font-size: 11.5px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: 0.15s;
+        }
+        .msg-btn:hover:not(:disabled) {
+            background: rgba(34, 232, 242, 0.14);
+            border-color: rgba(34, 232, 242, 0.45);
+            color: var(--text);
+            box-shadow: none;
+        }
+        .msg-btn.danger:hover:not(:disabled) {
+            background: rgba(255, 133, 133, 0.14);
+            border-color: rgba(255, 133, 133, 0.45);
+            color: var(--danger);
+        }
+        .msg-btn.stop-btn {
+            color: var(--warn);
+            border-color: rgba(255, 197, 110, 0.45);
+            background: rgba(255, 197, 110, 0.1);
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+        }
+        .msg-btn.stop-btn:hover:not(:disabled) {
+            background: rgba(255, 197, 110, 0.2);
+            border-color: var(--warn);
+            color: var(--warn);
+        }
+        .msg-btn.stop-btn svg { width: 10px; height: 10px; fill: currentColor; stroke: none; }
+        .msg-btn.speaker-btn { display: inline-flex; align-items: center; justify-content: center; padding: 3px 7px; }
+        .msg-btn.speaker-btn.playing {
+            color: var(--aqua);
+            border-color: rgba(20, 240, 196, 0.55);
+            background: rgba(20, 240, 196, 0.14);
+        }
+        .msg-btn.speaker-btn svg {
+            width: 14px; height: 14px; fill: none; stroke: currentColor;
+            stroke-width: 2; stroke-linecap: round; stroke-linejoin: round;
+        }
+        .inline-edit-wrap { display: flex; flex-direction: column; gap: 8px; width: 100%; }
+        .inline-edit-textarea {
+            width: 100%;
+            min-height: 110px;
+            background: #050b10;
+            color: var(--text);
+            border: 1px solid var(--cyan);
+            border-radius: 7px;
+            padding: 10px;
+            font-family: inherit;
+            font-size: 13.5px;
+            line-height: 1.5;
+            resize: vertical;
+        }
+        .inline-edit-actions { display: flex; gap: 8px; justify-content: flex-end; }
+        .reasoning-details {
+            margin-top: 6px;
+            padding-top: 8px;
+            border-top: 1px solid var(--line);
+            color: var(--muted);
+        }
+        .reasoning-details summary { cursor: pointer; user-select: none; }
+        .reasoning-details pre { margin: 8px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
+        #input-area {
+            width: min(1000px, calc(100% - 32px));
+            margin: 0 auto;
+            padding: 12px 0 18px;
+            border-top: 1px solid var(--line);
+            display: flex;
+            gap: 10px;
+            align-items: flex-end;
+        }
+        input[type="text"], input[type="number"], textarea, select {
+            background: var(--panel-raised);
+            color: var(--text);
+            border: 1px solid var(--line);
+            border-radius: 7px;
+            padding: 10px 12px;
+            font-family: inherit;
+            font-size: inherit;
+        }
+        input:focus, textarea:focus, select:focus {
+            outline: none;
+            border-color: var(--cyan);
+            box-shadow: var(--cyan-glow);
+        }
+        input[type="range"] { accent-color: var(--cyan); }
+        input[type="checkbox"] { accent-color: var(--aqua); }
+        #user-input { flex: 1; min-height: 44px; max-height: 160px; resize: vertical; }
+        .modal-backdrop {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.78);
+            justify-content: center;
+            align-items: center;
+            z-index: 20;
+            padding: 16px;
+            backdrop-filter: blur(5px);
+        }
+        .modal-content {
+            background: var(--panel);
+            border: 1px solid #1f4a5e;
+            border-radius: 12px;
+            padding: 18px 20px;
+            width: min(780px, 100%);
+            max-height: calc(100vh - 28px);
+            overflow-y: auto;
+            box-shadow: var(--cyan-glow);
+            display: flex;
+            flex-direction: column;
+            gap: 11px;
+        }
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid var(--line);
+            padding-bottom: 10px;
+        }
+        .modal-header h3 { margin: 0; color: var(--cyan); letter-spacing: 0.03em; }
+        .modal-header small { display: block; color: var(--muted); font-weight: 400; letter-spacing: 0; margin-top: 2px; }
+        .control-group { display: flex; flex-direction: column; gap: 5px; }
+        label { font-size: 13.5px; color: #c5dde4; font-weight: 500; }
+        .control-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+        .control-group input[type="number"], .control-group select, .control-group textarea { width: 100%; min-width: 0; }
+        .control-group small { color: var(--muted); line-height: 1.4; font-size: 12px; }
+        .control-group textarea { min-height: 68px; resize: vertical; }
+        .fit-report {
+            padding: 10px 12px;
+            border-radius: 7px;
+            background: var(--panel-raised);
+            border: 1px solid var(--line);
+            font-size: 12.5px;
+            white-space: pre-wrap;
+            line-height: 1.45;
+            color: var(--text);
+        }
+        .fit-report[data-warning="true"] { border-color: rgba(255, 197, 110, 0.55); }
+        .status-line { min-height: 1.3em; color: var(--muted); font-size: 13px; }
+        @media (max-width: 680px) {
+            header { padding: 8px 14px; }
+            .brand img { height: 40px; }
+            .control-grid { grid-template-columns: 1fr; }
+            .message { max-width: 94%; }
+            .message-actions { opacity: 0.9; }
+        }
+    </style>
+</head>
+<body>
+
+<header>
+    <div class="brand">
+        <img src="/assets/ghost_wordmark.png" alt="GHoSt Terminal — GPU Hosted Static Terminal">
+    </div>
+    <div class="header-controls">
+        <span id="status-indicator">OFFLINE</span>
+        <button id="new-chat-button" class="secondary" onclick="startNewChat()" title="Clear this conversation and reset the model context">NEW CHAT</button>
+        <button class="secondary" onclick="openSettings()">[ CONFIG ]</button>
+    </div>
+</header>
+
+<div id="chat-container"></div>
+
+<div id="input-area">
+    <textarea id="user-input" rows="1" placeholder="Say something..." onkeydown="if(event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); sendMessage(); }"></textarea>
+    <button id="send-button" onclick="sendMessage()">SEND</button>
+</div>
+
+<div id="settings-modal" class="modal-backdrop">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3>GHoSt Terminal // CONFIG
+                <small>GPU Hosted Static Terminal &mdash; a local, offline GGUF model loader</small>
+            </h3>
+            <button class="secondary" onclick="closeSettings()">CLOSE</button>
+        </div>
+
+        <div class="control-group">
+            <label>Local GGUF Model (<code>./ghost_models</code>)</label>
+            <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+                <select id="model-select" style="flex: 1; min-width: 220px;"></select>
+                <button onclick="checkFit()" id="fit-btn" class="secondary">CHECK FIT</button>
+                <button id="mount-btn" onclick="loadSelectedModel()">MOUNT</button>
+                <button id="unload-btn" onclick="unloadSelectedModel()" class="secondary">UNLOAD</button>
+            </div>
+        </div>
+
+        <div class="control-grid">
+            <div class="control-group">
+                <label>Hardware &amp; VRAM Preflight</label>
+                <div id="fit-report" class="fit-report">Click CHECK FIT or MOUNT to calculate optimal GPU layer offload.</div>
+                <label style="margin-top: 6px; font-weight: 500;"><input type="checkbox" id="flash-attn" checked> Flash Attention (recommended)</label>
+                <small>Enables Q8_0 KV-cache compression to fit more layers &amp; context in VRAM.</small>
+            </div>
+            <div class="control-group">
+                <label for="context-size">Context Length</label>
+                <input type="number" id="context-size" min="512" max="32768" step="512" value="8192">
+                <label for="chat-format" style="margin-top: 6px;">Chat Template</label>
+                <select id="chat-format">
+                    <option value="auto">Auto (use GGUF metadata)</option>
+                    <option value="chatml">ChatML</option>
+                    <option value="qwen">Qwen</option>
+                    <option value="gemma">Gemma</option>
+                    <option value="llama-2">Llama 2</option>
+                    <option value="llama-3">Llama 3</option>
+                    <option value="mistral-instruct">Mistral Instruct</option>
+                    <option value="zephyr">Zephyr</option>
+                    <option value="openchat">OpenChat</option>
+                    <option value="vicuna">Vicuna</option>
+                    <option value="alpaca">Alpaca</option>
+                    <option value="chatglm3">ChatGLM3</option>
+                </select>
+            </div>
+        </div>
+
+        <div class="control-group">
+            <label for="tts-voice">Read-Aloud Voice (<code>./piper_models</code>)</label>
+            <select id="tts-voice">
+                <option value="silas">Silas</option>
+                <option value="kara">Kara</option>
+            </select>
+            <small>Used by the speaker button on replies. Voices download automatically the first time you use them.</small>
+        </div>
+
+        <div class="control-group">
+            <label for="system-prompt">System Prompt</label>
+            <textarea id="system-prompt" rows="4" placeholder="Optional. Leave blank to send no system prompt."></textarea>
+        </div>
+
+        <div class="control-grid">
+            <div class="control-group">
+                <label>Temperature (<span id="temp-val">0.7</span>)</label>
+                <input type="range" id="temp-slider" min="0" max="2" step="0.05" value="0.7" oninput="document.getElementById('temp-val').innerText = this.value">
+                <label style="margin-top: 6px;">Top P (<span id="top-val">0.95</span>)</label>
+                <input type="range" id="top-slider" min="0" max="1" step="0.05" value="0.95" oninput="document.getElementById('top-val').innerText = this.value">
+                <label style="margin-top: 6px;">Top K (<span id="top-k-val">40</span>)</label>
+                <input type="range" id="top-k-sampler" min="0" max="100" step="1" value="40" oninput="document.getElementById('top-k-val').innerText = this.value">
+            </div>
+            <div class="control-group">
+                <label>Min P (<span id="min-p-val">0.05</span>)</label>
+                <input type="range" id="min-p" min="0" max="1" step="0.01" value="0.05" oninput="document.getElementById('min-p-val').innerText = this.value">
+                <label style="margin-top: 6px;">Repetition Penalty (<span id="repeat-val">1.00</span>)</label>
+                <input type="range" id="repeat-penalty" min="0.8" max="1.5" step="0.01" value="1" oninput="document.getElementById('repeat-val').innerText = Number(this.value).toFixed(2)">
+                <label style="margin-top: 6px;">Presence Penalty (<span id="presence-val">0.00</span>)</label>
+                <input type="range" id="presence-penalty" min="-2" max="2" step="0.05" value="0" oninput="document.getElementById('presence-val').innerText = Number(this.value).toFixed(2)">
+                <label style="margin-top: 8px;"><input type="checkbox" id="show-reasoning" onchange="renderConversation()"> Show <code>&lt;think&gt;</code> reasoning disclosure</label>
+            </div>
+        </div>
+
+        <div class="control-grid">
+            <div class="control-group">
+                <label for="max-tokens">Maximum Response Tokens</label>
+                <input type="number" id="max-tokens" min="1" max="8192" step="64" value="512">
+            </div>
+            <div class="control-group">
+                <label for="seed">Seed (optional)</label>
+                <input type="number" id="seed" step="1" placeholder="Random seed">
+            </div>
+        </div>
+
+        <div class="control-group">
+            <label for="stop-sequences">Stop Sequences (optional, one per line)</label>
+            <textarea id="stop-sequences" rows="2" placeholder="Optional stop strings"></textarea>
+        </div>
+
+        <div style="display: flex; gap: 10px; align-items: center;">
+            <button onclick="saveAndClose()">SAVE SETTINGS &amp; CLOSE</button>
+            <button class="secondary" onclick="closeSettings()">CANCEL</button>
+        </div>
+        <div id="loader-message" class="status-line" role="status"></div>
+    </div>
+</div>
+
+<script>
+    const API = "/v1";
+    let currentModel = "";
+    const conversation = [];
+    let editingIndex = null;
+    let isGenerating = false;
+    let lastSettings = null;
+    let activeStreamController = null;
+    let streamingIndex = null;
+    let abortRequested = false;
+
+    const SPEAKER_ICON_SVG = `<svg viewBox="0 0 24 24" aria-hidden="true"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M15.54 8.46a5 5 0 0 1 0 7.07"></path><path d="M19.07 4.93a10 10 0 0 1 0 14.14"></path></svg>`;
+    const STOP_ICON_SVG = `<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor"></rect></svg>`;
+
+    const el = id => document.getElementById(id);
+
+    async function api(path, options = {}) {
+        const response = await fetch(`${API}${path}`, options);
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            throw new Error(data.detail || data.error || `Request failed (${response.status})`);
+        }
+        return data;
+    }
+
+    const jsonPost = body => ({
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify(body)
+    });
+
+    function readSettings() {
+        return {
+            model: el("model-select").value || (lastSettings && lastSettings.model) || "",
+            chat_format: el("chat-format").value,
+            system_prompt: el("system-prompt").value,
+            tts_voice: el("tts-voice").value || "silas",
+            flash_attn: el("flash-attn").checked,
+            show_reasoning: el("show-reasoning").checked,
+            temperature: Number(el("temp-slider").value),
+            top_p: Number(el("top-slider").value),
+            min_p: Number(el("min-p").value),
+            top_k: Number(el("top-k-sampler").value),
+            repeat_penalty: Number(el("repeat-penalty").value),
+            presence_penalty: Number(el("presence-penalty").value),
+            seed: el("seed").value === "" ? null : Number(el("seed").value),
+            max_tokens: Number(el("max-tokens").value),
+            stop_sequences: el("stop-sequences").value,
+            n_ctx: Number(el("context-size").value)
+        };
+    }
+
+    function setSlider(id, labelId, value, digits) {
+        el(id).value = value;
+        el(labelId).innerText = digits === undefined ? value : Number(value).toFixed(digits);
+    }
+
+    function writeSettings(s) {
+        el("system-prompt").value = s.system_prompt || "";
+        el("chat-format").value = s.chat_format || "auto";
+        el("flash-attn").checked = s.flash_attn !== false;
+        el("show-reasoning").checked = s.show_reasoning === true;
+        setSlider("temp-slider", "temp-val", s.temperature ?? 0.7);
+        setSlider("top-slider", "top-val", s.top_p ?? 0.95);
+        setSlider("min-p", "min-p-val", s.min_p ?? 0.05);
+        setSlider("top-k-sampler", "top-k-val", s.top_k ?? 40);
+        setSlider("repeat-penalty", "repeat-val", s.repeat_penalty ?? 1.0, 2);
+        setSlider("presence-penalty", "presence-val", s.presence_penalty ?? 0, 2);
+        el("seed").value = s.seed ?? "";
+        el("max-tokens").value = s.max_tokens ?? 512;
+        el("stop-sequences").value = s.stop_sequences || "";
+        el("context-size").value = s.n_ctx ?? 8192;
+    }
+
+    function setStatus(text, color = "var(--muted)") {
+        const indicator = el("status-indicator");
+        indicator.innerText = text;
+        indicator.style.color = color;
+    }
+
+    function setMessage(text) { el("loader-message").innerText = text; }
+
+    function setChatEnabled(enabled) {
+        el("user-input").disabled = !enabled;
+        el("send-button").disabled = !enabled;
+    }
+
+    async function persistSettings() {
+        const settings = readSettings();
+        await api("/settings", jsonPost(settings));
+        lastSettings = settings;
+        return settings;
+    }
+
+    async function fetchVoices() {
+        try {
+            const data = await api("/tts/voices");
+            const select = el("tts-voice");
+            const current = (lastSettings && lastSettings.tts_voice) || select.value || "silas";
+            select.innerHTML = "";
+            data.voices.forEach(v => {
+                const opt = document.createElement("option");
+                opt.value = v.id;
+                opt.innerText = v.label;
+                select.appendChild(opt);
+            });
+            if (data.voices.some(v => v.id === current)) select.value = current;
+        } catch (e) { /* keep defaults */ }
+    }
+
+    async function fetchModels() {
+        try {
+            const data = await api("/models");
+            const select = el("model-select");
+            select.innerHTML = "";
+            data.data.forEach(m => {
+                const opt = document.createElement("option");
+                opt.value = m.id;
+                opt.innerText = `${m.id} (file ${m.file_size_gib} GiB)`;
+                select.appendChild(opt);
+            });
+            if (lastSettings && lastSettings.model && data.data.some(m => m.id === lastSettings.model)) {
+                select.value = lastSettings.model;
+            }
+            select.disabled = data.data.length === 0;
+            if (data.data.length === 0) setMessage("No GGUF models found. Drop .gguf files into the ghost_models folder, then reopen CONFIG.");
+        } catch (e) {
+            setStatus("API OFFLINE", "var(--danger)");
+            setMessage(e.message);
+        }
+    }
+
+    async function checkFit() {
+        const button = el("fit-btn");
+        const report = el("fit-report");
+        const settings = readSettings();
+        if (!settings.model) {
+            report.innerText = "Choose a GGUF model first.";
+            return;
+        }
+        button.disabled = true;
+        report.innerText = "Reading GGUF metadata and probing available VRAM...";
+        try {
+            const plan = await api("/preflight", jsonPost({
+                model: settings.model,
+                n_ctx: settings.n_ctx,
+                flash_attn: settings.flash_attn
+            }));
+            const offload = plan.n_gpu_layers === 0
+                ? "CPU-only fallback"
+                : `${plan.n_gpu_layers}/${plan.total_layers} layers on GPU`;
+            const gib = bytes => (bytes / (1024 ** 3)).toFixed(2);
+            const details = [
+                `${plan.architecture} · ${plan.quantization} · ${plan.parameter_count.toLocaleString()} parameters`,
+                `${plan.weight_gib.toFixed(2)} GiB weights · ${gib(plan.kv_cache_estimate_bytes)} GiB est. KV/state · ${gib(plan.compute_reserve_bytes)} GiB compute reserve`,
+                `KV cache: ${plan.kv_cache_type} (${plan.kv_method}) · Flash Attn: ${plan.flash_attn ? "ON" : "OFF"}`,
+                `${offload} · ${plan.gpu_name || "NVIDIA GPU unavailable"}`
+            ];
+            if (plan.warnings.length) details.push(...plan.warnings);
+            report.innerText = details.join("\n");
+            report.dataset.warning = plan.warnings.length || plan.n_gpu_layers === 0 ? "true" : "false";
+        } catch (error) {
+            report.innerText = error.message;
+            report.dataset.warning = "true";
+        } finally {
+            button.disabled = false;
+        }
+    }
+
+    async function loadSelectedModel() {
+        const model = el("model-select").value;
+        if (!model) return;
+        const button = el("mount-btn");
+        button.disabled = true;
+        setStatus("LOADING MODEL...", "var(--warn)");
+        setMessage("Loading may take a few minutes. Settings are saved locally.");
+        try {
+            const settings = readSettings();
+            settings.model = model;
+            await api("/settings", jsonPost(settings));
+            const loaded = await api("/load", jsonPost({
+                model,
+                n_ctx: settings.n_ctx,
+                chat_format: settings.chat_format,
+                flash_attn: settings.flash_attn
+            }));
+            currentModel = model;
+            lastSettings = settings;
+            setStatus(`ONLINE: ${model}`, "var(--aqua)");
+            const plan = loaded.preflight;
+            const offload = plan.n_gpu_layers === 0 ? "CPU-only" : `${plan.n_gpu_layers}/${plan.total_layers} GPU layers`;
+            el("fit-report").innerText = `${plan.architecture} · ${plan.quantization} · ${offload}\nKV cache: ${plan.kv_cache_type} · Flash Attn: ${plan.flash_attn ? "ON" : "OFF"}\n${plan.warnings.join("\n")}`.trim();
+            setMessage(`Loaded ${model}. Chat history is kept when switching models.`);
+            setChatEnabled(true);
+        } catch (e) {
+            setStatus("LOAD FAILED", "var(--danger)");
+            setMessage(e.message);
+        } finally {
+            button.disabled = false;
+        }
+    }
+
+    async function unloadSelectedModel() {
+        const button = el("unload-btn");
+        button.disabled = true;
+        try {
+            await api("/unload", {method: "POST"});
+            currentModel = "";
+            setChatEnabled(false);
+            setStatus("MODEL UNLOADED");
+            setMessage("Conversation remains on screen. Mount another model to continue.");
+        } catch (e) {
+            setMessage(e.message);
+        } finally {
+            button.disabled = false;
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Rendering
+    // ------------------------------------------------------------------
+    function escapeHtml(raw) {
+        return String(raw)
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;")
+            .replace(/'/g, "&#39;");
+    }
+
+    function formatMarkdownHtml(rawText) {
+        let text = escapeHtml(rawText);
+        const codeBlocks = [];
+        text = text.replace(/```([\s\S]*?)```/g, (_, code) => {
+            codeBlocks.push(`<pre><code>${code.trim()}</code></pre>`);
+            return `\x00CODEBLOCK_${codeBlocks.length - 1}\x00`;
+        });
+        const inlineCodes = [];
+        text = text.replace(/`([^`\n]+)`/g, (_, code) => {
+            inlineCodes.push(`<code>${code}</code>`);
+            return `\x00INLINECODE_${inlineCodes.length - 1}\x00`;
+        });
+        text = text.replace(/\*\*\*([^\*\n]+?)\*\*\*/g, "<strong><em>$1</em></strong>");
+        text = text.replace(/\*\*([^\*\n]+?)\*\*/g, "<strong>$1</strong>");
+        text = text.replace(/\*([^\*\n]+?)\*/g, "<em>$1</em>");
+        text = text.replace(/\x00INLINECODE_(\d+)\x00/g, (_, i) => inlineCodes[Number(i)]);
+        text = text.replace(/\x00CODEBLOCK_(\d+)\x00/g, (_, i) => codeBlocks[Number(i)]);
+        return text;
+    }
+
+    function splitThinkBlocks(text) {
+        const parts = [];
+        const pattern = /<think>([\s\S]*?)(?:<\/think>|$)/gi;
+        let cursor = 0;
+        let match;
+        while ((match = pattern.exec(text)) !== null) {
+            const visible = text.slice(cursor, match.index).replace(/<\/?think>/gi, "");
+            if (visible) parts.push({type: "text", content: visible});
+            parts.push({type: "reasoning", content: match[1]});
+            cursor = pattern.lastIndex;
+        }
+        const trailing = text.slice(cursor).replace(/<\/?think>/gi, "");
+        if (trailing) parts.push({type: "text", content: trailing});
+        return parts;
+    }
+
+    function stripThinkBlocks(text) {
+        return String(text).replace(/<think>[\s\S]*?(?:<\/think>|$)/gi, "").replace(/<\/?think>/gi, "").trim();
+    }
+
+    function renderConversation(scrollToBottom = false) {
+        const container = el("chat-container");
+        container.replaceChildren();
+
+        if (conversation.length === 0) {
+            const empty = document.createElement("div");
+            empty.className = "empty-state";
+            empty.innerHTML = `
+                <img src="/assets/ghost_logo_portrait.png" alt="GHoSt Terminal">
+                <p>GPU Hosted Static Terminal.<br>Open <b>[ CONFIG ]</b>, pick a GGUF model, and hit <b>MOUNT</b> to start chatting &mdash; fully local, fully offline.</p>
+            `;
+            container.appendChild(empty);
+            return;
+        }
+
+        const showReasoning = el("show-reasoning").checked;
+        let activeUserIndex = null;
+        if (isGenerating && streamingIndex !== null) {
+            for (let i = streamingIndex - 1; i >= 0; i--) {
+                if (conversation[i] && conversation[i].role === "user") { activeUserIndex = i; break; }
+            }
+        }
+
+        conversation.forEach((msg, idx) => {
+            const isUser = msg.role === "user";
+            const div = document.createElement("div");
+            div.className = `message ${isUser ? "user" : "ai"}`;
+            div.dataset.messageIndex = String(idx);
+
+            if (editingIndex === idx) {
+                const editWrap = document.createElement("div");
+                editWrap.className = "inline-edit-wrap";
+                const ta = document.createElement("textarea");
+                ta.className = "inline-edit-textarea";
+                ta.id = `edit-ta-${idx}`;
+                ta.value = isUser ? msg.content : stripThinkBlocks(msg.content);
+                const btnRow = document.createElement("div");
+                btnRow.className = "inline-edit-actions";
+                const saveBtn = document.createElement("button");
+                saveBtn.innerText = "Save";
+                saveBtn.onclick = () => saveEditMessage(idx);
+                const cancelBtn = document.createElement("button");
+                cancelBtn.className = "secondary";
+                cancelBtn.innerText = "Cancel";
+                cancelBtn.onclick = () => cancelEditMessage();
+                btnRow.appendChild(cancelBtn);
+                btnRow.appendChild(saveBtn);
+                editWrap.appendChild(ta);
+                editWrap.appendChild(btnRow);
+                div.appendChild(editWrap);
+            } else {
+                const body = document.createElement("div");
+                body.className = "message-body";
+                if (isUser) {
+                    body.innerHTML = formatMarkdownHtml(msg.content.replace(/<\/?think>/gi, ""));
+                } else {
+                    for (const part of splitThinkBlocks(String(msg.content))) {
+                        if (part.type === "text") {
+                            const span = document.createElement("div");
+                            span.innerHTML = formatMarkdownHtml(part.content.trim());
+                            body.appendChild(span);
+                        } else if (showReasoning) {
+                            const details = document.createElement("details");
+                            details.className = "reasoning-details";
+                            const summary = document.createElement("summary");
+                            summary.textContent = "Model reasoning";
+                            const pre = document.createElement("pre");
+                            pre.textContent = part.content;
+                            details.appendChild(summary);
+                            details.appendChild(pre);
+                            body.appendChild(details);
+                        }
+                    }
+                }
+                div.appendChild(body);
+
+                const actions = document.createElement("div");
+                actions.className = "message-actions";
+                if (!isUser && isGenerating && idx === streamingIndex) div.classList.add("pending");
+
+                if (isUser && isGenerating && idx === activeUserIndex) {
+                    actions.classList.add("live");
+                    const stopBtn = document.createElement("button");
+                    stopBtn.className = "msg-btn stop-btn";
+                    stopBtn.innerHTML = `${STOP_ICON_SVG}<span> Stop</span>`;
+                    stopBtn.title = "Stop generating this response";
+                    stopBtn.disabled = abortRequested;
+                    stopBtn.onclick = stopGeneration;
+                    actions.appendChild(stopBtn);
+                }
+
+                if (!isUser) {
+                    const speakBtn = document.createElement("button");
+                    speakBtn.className = "msg-btn speaker-btn";
+                    speakBtn.innerHTML = SPEAKER_ICON_SVG;
+                    speakBtn.title = "Read aloud";
+                    speakBtn.onclick = () => readAloud(idx, speakBtn);
+                    actions.appendChild(speakBtn);
+                }
+
+                const copyBtn = document.createElement("button");
+                copyBtn.className = "msg-btn";
+                copyBtn.innerText = "Copy";
+                copyBtn.title = "Copy message text";
+                copyBtn.onclick = () => copyMessage(idx, copyBtn);
+                actions.appendChild(copyBtn);
+
+                const editBtn = document.createElement("button");
+                editBtn.className = "msg-btn";
+                editBtn.innerText = "Edit";
+                editBtn.title = "Edit this message";
+                editBtn.disabled = isGenerating;
+                editBtn.onclick = () => startEditMessage(idx);
+                actions.appendChild(editBtn);
+
+                if (!isUser) {
+                    const redoBtn = document.createElement("button");
+                    redoBtn.className = "msg-btn";
+                    redoBtn.innerText = "Redo";
+                    redoBtn.title = "Regenerate this response";
+                    redoBtn.disabled = isGenerating;
+                    redoBtn.onclick = () => redoMessage(idx);
+                    actions.appendChild(redoBtn);
+                }
+
+                const delBtn = document.createElement("button");
+                delBtn.className = "msg-btn danger";
+                delBtn.innerText = "Delete";
+                delBtn.title = "Delete this message from the conversation";
+                delBtn.disabled = isGenerating;
+                delBtn.onclick = () => deleteMessage(idx);
+                actions.appendChild(delBtn);
+
+                div.appendChild(actions);
+            }
+            container.appendChild(div);
+        });
+
+        if (scrollToBottom) container.scrollTop = container.scrollHeight;
+    }
+
+    // ------------------------------------------------------------------
+    // Read aloud (Piper)
+    // ------------------------------------------------------------------
+    let activeAudioPlayer = null;
+    let activeVoiceBtn = null;
+    let activeTtsController = null;
+
+    function resetActiveVoiceButton() {
+        if (activeVoiceBtn) {
+            activeVoiceBtn.innerHTML = SPEAKER_ICON_SVG;
+            activeVoiceBtn.classList.remove("playing");
+            activeVoiceBtn.title = "Read aloud";
+            activeVoiceBtn = null;
+        }
+    }
+
+    async function readAloud(idx, buttonEl) {
+        const msg = conversation[idx];
+        if (!msg) return;
+
+        if (activeVoiceBtn === buttonEl) {
+            if (activeTtsController) { activeTtsController.abort(); activeTtsController = null; }
+            if (activeAudioPlayer) { activeAudioPlayer.pause(); activeAudioPlayer = null; }
+            try { await api("/tts/stop", {method: "POST"}); } catch (e) {}
+            resetActiveVoiceButton();
+            return;
+        }
+
+        if (activeTtsController) { activeTtsController.abort(); activeTtsController = null; }
+        if (activeAudioPlayer) { activeAudioPlayer.pause(); activeAudioPlayer = null; }
+        resetActiveVoiceButton();
+
+        const voiceName = el("tts-voice").value || (lastSettings && lastSettings.tts_voice) || "silas";
+        const clean = msg.role === "assistant" ? stripThinkBlocks(msg.content) : msg.content;
+        const controller = new AbortController();
+        activeTtsController = controller;
+        activeVoiceBtn = buttonEl;
+        buttonEl.classList.add("playing");
+        buttonEl.innerHTML = STOP_ICON_SVG;
+        buttonEl.title = "Stop reading aloud (first use downloads the voice)";
+
+        try {
+            const res = await fetch(`${API}/tts`, {
+                method: "POST",
+                headers: {"Content-Type": "application/json"},
+                signal: controller.signal,
+                body: JSON.stringify({text: clean, voice: voiceName, play_on_host: true})
+            });
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({}));
+                throw new Error(err.detail || `TTS failed (${res.status})`);
+            }
+            const wavBlob = await res.blob();
+            if (controller.signal.aborted) return;
+            // Audio is played by the host process; reset the button when it should be done.
+            const durationMs = Math.max(1200, Math.round((wavBlob.size / 44100) * 1000));
+            setTimeout(() => { if (activeVoiceBtn === buttonEl) resetActiveVoiceButton(); }, durationMs);
+        } catch (e) {
+            if (activeVoiceBtn === buttonEl) resetActiveVoiceButton();
+            if (e && e.name === "AbortError") return;
+            alert(`Voice playback error: ${e.message}`);
+        } finally {
+            if (activeTtsController === controller) activeTtsController = null;
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Message actions
+    // ------------------------------------------------------------------
+    async function copyTextToClipboard(text) {
+        if (navigator.clipboard && navigator.clipboard.writeText && window.isSecureContext) {
+            try { await navigator.clipboard.writeText(text); return; } catch (e) {}
+        }
+        const textarea = document.createElement("textarea");
+        textarea.value = text;
+        textarea.setAttribute("readonly", "");
+        textarea.style.cssText = "position:fixed;top:-9999px;left:-9999px;opacity:0";
+        document.body.appendChild(textarea);
+        textarea.focus();
+        textarea.select();
+        textarea.setSelectionRange(0, textarea.value.length);
+        let ok = false;
+        try { ok = document.execCommand("copy"); } finally { document.body.removeChild(textarea); }
+        if (!ok) throw new Error("Copy command unavailable.");
+    }
+
+    async function copyMessage(idx, buttonEl) {
+        const msg = conversation[idx];
+        if (!msg) return;
+        const clean = msg.role === "assistant" ? stripThinkBlocks(msg.content) : msg.content;
+        try {
+            await copyTextToClipboard(clean);
+            const prev = buttonEl.innerText;
+            buttonEl.innerText = "Copied!";
+            setTimeout(() => { buttonEl.innerText = prev; }, 1200);
+        } catch (e) {
+            alert("Could not copy to clipboard.");
+        }
+    }
+
+    function startEditMessage(idx) {
+        if (isGenerating) return;
+        editingIndex = idx;
+        renderConversation(false);
+        const ta = el(`edit-ta-${idx}`);
+        if (ta) { ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); }
+    }
+
+    function saveEditMessage(idx) {
+        const ta = el(`edit-ta-${idx}`);
+        if (!ta) return;
+        const updated = ta.value.trim();
+        if (!updated) return;
+        conversation[idx].content = updated;
+        editingIndex = null;
+        renderConversation(false);
+    }
+
+    function cancelEditMessage() {
+        editingIndex = null;
+        renderConversation(false);
+    }
+
+    function deleteMessage(idx) {
+        if (isGenerating) return;
+        conversation.splice(idx, 1);
+        if (editingIndex === idx) editingIndex = null;
+        renderConversation(false);
+    }
+
+    async function stopGeneration() {
+        if (!isGenerating || abortRequested) return;
+        abortRequested = true;
+        renderConversation(false);
+        try {
+            const result = await api("/abort", {method: "POST"});
+            if (result.status !== "aborting") {
+                abortRequested = false;
+                renderConversation(false);
+                return;
+            }
+        } catch (e) {
+            abortRequested = false;
+            renderConversation(false);
+            setStatus(`Could not stop generation: ${e.message}`, "var(--warn)");
+            return;
+        }
+        if (activeStreamController) activeStreamController.abort();
+    }
+
+    // ------------------------------------------------------------------
+    // Streaming completion
+    // ------------------------------------------------------------------
+    async function requestCompletionForHistory(historySlice, targetIndex) {
+        const settings = lastSettings || readSettings();
+        const stop = (settings.stop_sequences || "").split(/\r?\n/).map(v => v.trim()).filter(Boolean);
+        const cleanedHistory = [];
+        const recent = historySlice.slice(-40);
+        for (let i = 0; i < recent.length; i++) {
+            const cur = recent[i];
+            if (!cur || !cur.content) continue;
+            const next = recent[i + 1];
+            if (cur.role === "user" && next && next.role === "assistant" && String(next.content).startsWith("ERROR:")) { i++; continue; }
+            if (cur.role === "assistant" && String(cur.content).startsWith("ERROR:")) continue;
+            cleanedHistory.push(cur);
+        }
+        const systemPrompt = (settings.system_prompt || "").trim();
+        const messages = systemPrompt
+            ? [{role: "system", content: systemPrompt}, ...cleanedHistory]
+            : [...cleanedHistory];
+
+        const controller = new AbortController();
+        activeStreamController = controller;
+        let accumulated = "";
+        let sawAbortMarker = false;
+        let paintHandle = null;
+        const paint = () => {
+            paintHandle = null;
+            const body = document.querySelector(`[data-message-index="${targetIndex}"] .message-body`);
+            if (body) body.textContent = accumulated;
+            const container = el("chat-container");
+            if ((container.scrollHeight - container.scrollTop - container.clientHeight) < 120) {
+                container.scrollTop = container.scrollHeight;
+            }
+        };
+        const queuePaint = () => { if (paintHandle === null) paintHandle = requestAnimationFrame(paint); };
+        const consumeFrame = frame => {
+            const data = frame.split(/\r?\n/)
+                .filter(line => line.startsWith("data:"))
+                .map(line => line.slice(5).replace(/^ /, ""))
+                .join("\n");
+            if (!data || data === "[DONE]") return;
+            let chunk;
+            try { chunk = JSON.parse(data); }
+            catch (e) { throw new Error("The server returned an invalid streaming response."); }
+            if (chunk.error) throw new Error(chunk.error.message || "Generation error");
+            if (chunk.ghost_aborted) sawAbortMarker = true;
+            const delta = chunk.choices && chunk.choices[0] && chunk.choices[0].delta;
+            if (!delta) return;
+            if (typeof delta.reasoning_content === "string" && delta.reasoning_content) {
+                accumulated += `<think>${delta.reasoning_content}</think>`;
+            }
+            if (typeof delta.content === "string" && delta.content) accumulated += delta.content;
+            queuePaint();
+        };
+
+        try {
+            const response = await fetch(`${API}/chat/completions`, {
+                method: "POST",
+                headers: {"Content-Type": "application/json", "Accept": "text/event-stream"},
+                signal: controller.signal,
+                body: JSON.stringify({
+                    model: currentModel,
+                    messages: messages,
+                    stream: true,
+                    temperature: settings.temperature,
+                    top_p: settings.top_p,
+                    min_p: settings.min_p,
+                    top_k: settings.top_k,
+                    repeat_penalty: settings.repeat_penalty,
+                    presence_penalty: settings.presence_penalty,
+                    seed: settings.seed,
+                    stop: stop.length ? stop : null,
+                    max_tokens: settings.max_tokens,
+                    show_reasoning: settings.show_reasoning
+                })
+            });
+            if (!response.ok) {
+                const error = await response.json().catch(() => ({}));
+                throw new Error(error.detail || error.error || `Request failed (${response.status})`);
+            }
+            if (!response.body) throw new Error("The server did not provide a streaming response.");
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = "";
+            try {
+                while (true) {
+                    const {done, value} = await reader.read();
+                    if (done) break;
+                    buffer += decoder.decode(value, {stream: true});
+                    const frames = buffer.split(/\r?\n\r?\n/);
+                    buffer = frames.pop();
+                    for (const frame of frames) consumeFrame(frame);
+                }
+                buffer += decoder.decode();
+                if (buffer.trim()) consumeFrame(buffer);
+            } finally {
+                reader.releaseLock();
+            }
+        } catch (e) {
+            if (e.name !== "AbortError" || !controller.signal.aborted) throw e;
+        } finally {
+            if (paintHandle !== null) cancelAnimationFrame(paintHandle);
+            paint();
+            if (activeStreamController === controller) activeStreamController = null;
+        }
+        return {content: accumulated, aborted: sawAbortMarker || abortRequested};
+    }
+
+    function beginGeneration() {
+        isGenerating = true;
+        abortRequested = false;
+        editingIndex = null;
+        el("send-button").disabled = true;
+        el("new-chat-button").disabled = true;
+    }
+
+    function endGeneration() {
+        isGenerating = false;
+        abortRequested = false;
+        streamingIndex = null;
+        activeStreamController = null;
+        el("send-button").disabled = !currentModel;
+        el("new-chat-button").disabled = false;
+    }
+
+    async function redoMessage(idx) {
+        if (isGenerating || !currentModel) return;
+        const target = conversation[idx];
+        if (!target || target.role !== "assistant") return;
+        const historyBefore = conversation.slice(0, idx);
+        if (!historyBefore.some(m => m.role === "user")) return;
+
+        beginGeneration();
+        const previousContent = conversation[idx].content;
+        conversation[idx].content = "";
+        streamingIndex = idx;
+        renderConversation(false);
+
+        try {
+            const result = await requestCompletionForHistory(historyBefore, idx);
+            if (result.aborted) {
+                conversation[idx].content = result.content
+                    ? `${result.content}\n\n*[Stopped by you.]*`
+                    : "*[Stopped before any output.]*";
+            } else {
+                conversation[idx].content = result.content || previousContent;
+            }
+        } catch (e) {
+            conversation[idx].content = previousContent;
+            alert(`Redo failed: ${e.message}`);
+        } finally {
+            endGeneration();
+            renderConversation(false);
+        }
+    }
+
+    async function sendMessage() {
+        const input = el("user-input");
+        const text = input.value.trim();
+        if (!text || isGenerating) return;
+        if (!currentModel) {
+            openSettings();
+            setMessage("Mount a model first to start chatting.");
+            return;
+        }
+        beginGeneration();
+        conversation.push({role: "user", content: text});
+        input.value = "";
+        const replyIndex = conversation.length;
+        conversation.push({role: "assistant", content: ""});
+        streamingIndex = replyIndex;
+        renderConversation(true);
+
+        try {
+            const result = await requestCompletionForHistory(conversation.slice(0, replyIndex), replyIndex);
+            if (result.aborted) {
+                conversation[replyIndex].content = result.content
+                    ? `${result.content}\n\n*[Stopped by you.]*`
+                    : "*[Stopped before any output.]*";
+            } else {
+                conversation[replyIndex].content = result.content || "(empty response)";
+            }
+        } catch (e) {
+            conversation[replyIndex].content = abortRequested
+                ? (conversation[replyIndex].content || "*[Stopped before any output.]*")
+                : `ERROR: ${e.message}`;
+        } finally {
+            endGeneration();
+            renderConversation(false);
+            input.focus();
+        }
+    }
+
+    async function startNewChat() {
+        if (isGenerating) return;
+        if (conversation.length && !window.confirm("Clear this conversation and reset the model context? The model will stay loaded.")) return;
+        const button = el("new-chat-button");
+        button.disabled = true;
+        try {
+            if (currentModel) await api("/reset", {method: "POST"});
+            conversation.length = 0;
+            editingIndex = null;
+            el("user-input").value = "";
+            renderConversation(false);
+        } catch (error) {
+            alert(error.message);
+        } finally {
+            button.disabled = false;
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Settings modal / startup
+    // ------------------------------------------------------------------
+    function openSettings() {
+        setMessage("Settings are stored beside this app. Nothing leaves your machine.");
+        el("settings-modal").style.display = "flex";
+        fetchModels();
+        fetchVoices();
+    }
+
+    function closeSettings() {
+        el("settings-modal").style.display = "none";
+    }
+
+    async function saveAndClose() {
+        try {
+            await persistSettings();
+            closeSettings();
+        } catch (e) {
+            setMessage(e.message);
+        }
+    }
+
+    async function initialize() {
+        setChatEnabled(false);
+        renderConversation(false);
+        el("settings-modal").style.display = "flex";
+        try {
+            lastSettings = await api("/settings");
+            writeSettings(lastSettings);
+        } catch (e) {
+            setMessage(e.message);
+        }
+        await Promise.all([fetchModels(), fetchVoices()]);
+        try {
+            const status = await api("/status");
+            currentModel = status.resident_model || "";
+            if (currentModel) {
+                setStatus(`ONLINE: ${currentModel}`, "var(--aqua)");
+                setChatEnabled(true);
+                setMessage(`Loaded with ${status.n_gpu_layers}-layer GPU offload, ${status.n_ctx} context, ${status.chat_format || "auto"} template.`);
+            } else {
+                setStatus("NO MODEL LOADED");
+            }
+        } catch (e) {
+            setStatus("API OFFLINE", "var(--danger)");
+        }
+        el("model-select").addEventListener("change", () => persistSettings().catch(() => {}));
+    }
+
+    initialize();
+</script>
+
+</body>
+</html>

@@ -1,0 +1,13 @@
+llama-cpp-python>=0.2.90
+fastapi>=0.111.0
+uvicorn>=0.30.0
+pydantic>=2.7.0
+pywebview>=5.0
+pyinstaller>=6.0
+gguf>=0.19.0
+pefile>=2023.2.7
+piper-tts==1.8.0
+onnxruntime==1.30.0
+sounddevice>=0.4.6
+soundfile>=0.12.1
+nvidia-cublas==13.3.0.5; sys_platform == "win32" and platform_machine == "AMD64"
