@@ -15,21 +15,48 @@ import types
 import unittest
 import wave
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional, Union
 from unittest import mock
+
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr, ValidationError, model_validator
 
 import build_terminal
 import package_release
 
 
+def load_server_constants(*names):
+    source = Path(__file__).resolve().parents[1] / "ghost_terminal.py"
+    tree = ast.parse(source.read_text(encoding="utf-8"), filename=str(source))
+    nodes = [
+        node for node in tree.body
+        if isinstance(node, ast.Assign)
+        and any(isinstance(target, ast.Name) and target.id in names for target in node.targets)
+    ]
+    namespace = {}
+    exec(compile(ast.Module(body=nodes, type_ignores=[]), str(source), "exec"), namespace)
+    return {name: namespace[name] for name in names}
+
+
 def load_server_parts(*names, extra=None):
     source = Path(__file__).resolve().parents[1] / "ghost_terminal.py"
     tree = ast.parse(source.read_text(encoding="utf-8"), filename=str(source))
-    nodes = [node for node in tree.body if isinstance(node, (ast.FunctionDef, ast.ClassDef)) and node.name in names]
+    wanted = set(names)
+    nodes = [
+        node for node in tree.body
+        if (
+            isinstance(node, (ast.FunctionDef, ast.ClassDef)) and node.name in wanted
+        ) or (
+            isinstance(node, ast.Assign)
+            and any(isinstance(target, ast.Name) and target.id in wanted for target in node.targets)
+        )
+    ]
     for node in nodes:
-        node.decorator_list = []
+        if isinstance(node, (ast.FunctionDef, ast.ClassDef)):
+            node.decorator_list = []
     namespace = {
-        "Any": Any, "Dict": Dict, "List": List, "Optional": Optional,
+        "Any": Any, "Dict": Dict, "List": List, "Literal": Literal, "Optional": Optional, "Union": Union,
+        "BaseModel": BaseModel, "ConfigDict": ConfigDict, "Field": Field,
+        "StrictInt": StrictInt, "StrictStr": StrictStr, "model_validator": model_validator,
         "Path": Path, "io": io, "log": logging.getLogger("tests"), "os": os,
         "re": re, "subprocess": subprocess, "sys": sys, "tempfile": tempfile,
         "threading": threading, "wave": wave,
@@ -189,6 +216,119 @@ class RegressionTests(unittest.TestCase):
                 with self.assertRaises(RuntimeError):
                     package_release.build_release_zip(root, release)
             self.assertEqual(release.read_bytes(), b"existing release")
+
+    def test_high_context_and_token_limits(self):
+        constants = load_server_constants(
+            "DEFAULT_N_CTX", "MIN_N_CTX", "MAX_N_CTX", "MAX_UI_MAX_TOKENS", "DEFAULT_SETTINGS"
+        )
+        ns = load_server_parts(
+            "ChatFormat", "Message", "JsonSchemaSpec", "ResponseFormat",
+            "ToolFunctionSpec", "ToolSpec", "ChatRequest",
+            "LoadRequest", "PreflightRequest", "LoaderSettings", "_chat_completion_args",
+            extra={
+                **constants,
+                "load_settings": lambda: {"max_tokens": 512},
+                "secrets": types.SimpleNamespace(randbelow=lambda n: 0),
+            },
+        )
+        max_n_ctx = constants["MAX_N_CTX"]
+        self.assertGreaterEqual(max_n_ctx, 262144)
+
+        for cls in (ns["LoadRequest"], ns["PreflightRequest"], ns["LoaderSettings"]):
+            for ctx in (65000, 65536, 131072, max_n_ctx):
+                obj = cls(model="test.gguf", n_ctx=ctx)
+                self.assertEqual(obj.n_ctx, ctx)
+            for bad_ctx in (511, max_n_ctx + 1):
+                with self.assertRaises(ValidationError):
+                    cls(model="test.gguf", n_ctx=bad_ctx)
+
+        req_completion = ns["ChatRequest"](
+            model="test.gguf",
+            messages=[{"role": "user", "content": "hi"}],
+            max_completion_tokens=65536,
+        )
+        args = ns["_chat_completion_args"](req_completion, [{"role": "user", "content": "hi"}])
+        self.assertEqual(args["max_tokens"], 65536)
+
+        req_both = ns["ChatRequest"](
+            model="test.gguf",
+            messages=[{"role": "user", "content": "hi"}],
+            max_tokens=4096,
+            max_completion_tokens=65536,
+        )
+        args_both = ns["_chat_completion_args"](req_both, [{"role": "user", "content": "hi"}])
+        self.assertEqual(args_both["max_tokens"], 4096)
+
+    def test_preflight_reports_and_warns_on_declared_context_length(self):
+        class FakeField:
+            def __init__(self, value):
+                self._value = value
+
+            def contents(self):
+                return self._value
+
+        class FakeTensor:
+            def __init__(self, name, n_elements, n_bytes, shape=()):
+                self.name = name
+                self.n_elements = n_elements
+                self.n_bytes = n_bytes
+                self.shape = shape
+
+        declared_ctx = {"value": 40960}
+
+        class FakeGGUFReader:
+            def __init__(self, path):
+                self.fields = {
+                    "general.architecture": FakeField("qwen35"),
+                    "qwen35.block_count": FakeField(2),
+                    "qwen35.embedding_length": FakeField(1024),
+                    "qwen35.attention.head_count": FakeField(4),
+                    "qwen35.attention.head_count_kv": FakeField(2),
+                    "qwen35.attention.key_length": FakeField(256),
+                    "qwen35.attention.value_length": FakeField(256),
+                    "qwen35.context_length": FakeField(declared_ctx["value"]),
+                    "qwen35.ssm.conv_kernel": FakeField(4),
+                    "qwen35.ssm.inner_size": FakeField(1024),
+                    "qwen35.ssm.state_size": FakeField(64),
+                    "qwen35.ssm.group_count": FakeField(4),
+                    "general.file_type": FakeField(17),
+                }
+                self.tensors = [
+                    FakeTensor("blk.0.ssm_conv1d.weight", 4 * 1536, 1024 * 1024, (4, 1536)),
+                    FakeTensor("blk.1.attn_k.weight", 1024 * 512, 1024 * 1024),
+                    FakeTensor("blk.1.attn_v.weight", 1024 * 512, 1024 * 1024),
+                ]
+
+        with tempfile.TemporaryDirectory() as directory:
+            model_dir = Path(directory)
+            (model_dir / "test.gguf").write_bytes(b"GGUF")
+            ns = load_server_parts("_gguf_value", "preflight_model", extra={
+                "MODEL_DIR": model_dir,
+                "GGUFReader": FakeGGUFReader,
+                "LlamaFileType": lambda x: types.SimpleNamespace(name="MOSTLY_Q5_K_M"),
+                "llama_cpp": types.SimpleNamespace(GGML_TYPE_F16=1, GGML_TYPE_Q8_0=8),
+                "BACKEND_NAME": "cuda",
+                "GIB": 1024 ** 3,
+                "GPU_MAX_UTILIZATION": 0.95,
+                "GPU_SAFETY_RESERVE_BYTES": 768 * 1024 ** 2,
+                "_probe_nvidia_gpus": lambda: [{"name": "RTX Test", "total_bytes": 16 * 1024 ** 3, "free_bytes": 14 * 1024 ** 3}],
+                "HTTPException": HTTPError,
+            })
+
+            over_plan = ns["preflight_model"]("test.gguf", 65000, flash_attn=True)
+            self.assertEqual(over_plan["model_context_length"], 40960)
+            self.assertEqual(over_plan["n_gpu_layers"], 2)
+            self.assertTrue(any("exceeds this GGUF's declared context_length (40,960)" in w for w in over_plan["warnings"]))
+
+            declared_ctx["value"] = 262144
+            ok_plan = ns["preflight_model"]("test.gguf", 65000, flash_attn=True)
+            self.assertEqual(ok_plan["model_context_length"], 262144)
+            self.assertEqual(ok_plan["warnings"], [])
+
+    def test_ui_context_input_and_error_formatting(self):
+        html = (Path(__file__).resolve().parents[1] / "ghost_terminal.html").read_text(encoding="utf-8")
+        self.assertIn('id="context-size" min="512" max="262144" step="1"', html)
+        self.assertIn("function extractApiError(data, status)", html)
 
 
 if __name__ == "__main__":

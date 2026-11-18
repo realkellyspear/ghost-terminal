@@ -31,7 +31,7 @@
 
 ### Option A: Download the Standalone Windows Release (Recommended)
 
-1. Download and extract **`GHoSt-Terminal-v1.0.1-win64.zip`** from Releases.
+1. Download and extract **`GHoSt-Terminal-v1.0.2-win64.zip`** from Releases.
 2. Copy one or more `.gguf` model files into the extracted `ghost_models/` folder.
 3. Double-click **`GHoSt-Terminal.exe`**.
 4. In **[ CONFIG ]**, select your model, click **CHECK FIT** (optional) and **MOUNT**, then click **CLOSE** (or **SAVE SETTINGS & CLOSE**) to start chatting.
@@ -84,7 +84,7 @@ python -m unittest discover -s tests -v
 python package_release.py
 ```
 
-This stages files in a temporary directory and writes **`../GHoSt-Terminal-v1.0.1-win64.zip`** containing:
+This stages files in a temporary directory and writes **`../GHoSt-Terminal-v1.0.2-win64.zip`** containing:
 
 ```text
 GHoSt-Terminal/

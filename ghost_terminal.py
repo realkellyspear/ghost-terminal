@@ -241,6 +241,9 @@ HTML_PATH = RESOURCE_DIR / "ghost_terminal.html"
 ASSET_DIR = RESOURCE_DIR / "assets"
 LOG_PATH = APP_DIR / "ghost_terminal.log"
 DEFAULT_N_CTX = 8192
+MIN_N_CTX = 512
+MAX_N_CTX = 262144
+MAX_UI_MAX_TOKENS = 32768
 GIB = 1024 ** 3
 GPU_SAFETY_RESERVE_BYTES = 768 * 1024 ** 2
 GPU_MAX_UTILIZATION = 0.95
@@ -633,6 +636,10 @@ def preflight_model(filename: str, context_size: int, flash_attn: bool = True) -
         sliding_window = int(sliding_window_value) if sliding_window_value is not None else None
         if sliding_window is not None and sliding_window <= 0:
             sliding_window = None
+        raw_model_context = _gguf_value(reader, f"{architecture}.context_length")
+        model_context_length = int(raw_model_context) if raw_model_context is not None else None
+        if model_context_length is not None and model_context_length <= 0:
+            model_context_length = None
         conv_kernel = int(_gguf_value(reader, f"{architecture}.ssm.conv_kernel") or 0)
         ssm_inner_size = int(_gguf_value(reader, f"{architecture}.ssm.inner_size") or 0)
         ssm_state_size = int(_gguf_value(reader, f"{architecture}.ssm.state_size") or 0)
@@ -740,6 +747,10 @@ def preflight_model(filename: str, context_size: int, flash_attn: bool = True) -
     compute_reserve_bytes = int(0.5 * GIB + 0.04 * weight_bytes)
     devices = _probe_nvidia_gpus()
     warnings = []
+    if model_context_length is not None and context_size > model_context_length:
+        warnings.append(
+            f"Requested context ({context_size:,}) exceeds this GGUF's declared context_length ({model_context_length:,})."
+        )
     gpu_layers = 0
     gpu_weight_bytes = 0
     kv_cache_bytes = kv_f16_bytes
@@ -815,6 +826,7 @@ def preflight_model(filename: str, context_size: int, flash_attn: bool = True) -
         "weight_bytes": weight_bytes,
         "weight_gib": round(weight_bytes / GIB, 3),
         "context_size": context_size,
+        "model_context_length": model_context_length,
         "total_layers": layer_count,
         "attention_layers": len(attention_layers),
         "ssm_layers": len(ssm_layers),
@@ -1055,7 +1067,8 @@ class ChatRequest(BaseModel):
     top_k: Optional[StrictInt] = Field(default=None, ge=0, le=200)
     repeat_penalty: Optional[float] = Field(default=None, ge=0.0, le=2.0)
     presence_penalty: Optional[float] = Field(default=None, ge=-2.0, le=2.0)
-    max_tokens: Optional[StrictInt] = Field(default=None, ge=1, le=32768)
+    max_tokens: Optional[StrictInt] = Field(default=None, ge=1, le=MAX_N_CTX)
+    max_completion_tokens: Optional[StrictInt] = Field(default=None, ge=1, le=MAX_N_CTX)
     stream: Optional[bool] = False
     stop: Optional[Union[str, List[str]]] = None
     seed: Optional[StrictInt] = None
@@ -1067,14 +1080,14 @@ class ChatRequest(BaseModel):
 
 class LoadRequest(BaseModel):
     model: StrictStr = Field(min_length=1, max_length=255)
-    n_ctx: StrictInt = Field(default=DEFAULT_N_CTX, ge=512, le=32768)
+    n_ctx: StrictInt = Field(default=DEFAULT_N_CTX, ge=MIN_N_CTX, le=MAX_N_CTX)
     chat_format: ChatFormat = "auto"
     flash_attn: bool = True
 
 
 class PreflightRequest(BaseModel):
     model: StrictStr = Field(min_length=1, max_length=255)
-    n_ctx: StrictInt = Field(default=DEFAULT_N_CTX, ge=512, le=32768)
+    n_ctx: StrictInt = Field(default=DEFAULT_N_CTX, ge=MIN_N_CTX, le=MAX_N_CTX)
     flash_attn: bool = True
 
 
@@ -1098,9 +1111,9 @@ class LoaderSettings(BaseModel):
     repeat_penalty: float = Field(default=1.0, ge=0.0, le=2.0)
     presence_penalty: float = Field(default=0.0, ge=-2.0, le=2.0)
     seed: Optional[StrictInt] = None
-    max_tokens: StrictInt = Field(default=512, ge=1, le=8192)
+    max_tokens: StrictInt = Field(default=512, ge=1, le=MAX_UI_MAX_TOKENS)
     stop_sequences: StrictStr = Field(default="", max_length=2000)
-    n_ctx: StrictInt = Field(default=DEFAULT_N_CTX, ge=512, le=32768)
+    n_ctx: StrictInt = Field(default=DEFAULT_N_CTX, ge=MIN_N_CTX, le=MAX_N_CTX)
 
 
 def load_settings() -> dict:
@@ -1122,7 +1135,7 @@ def save_settings(settings: LoaderSettings) -> dict:
     return data
 
 
-app = FastAPI(title="GHoSt Terminal", version="1.0.1", docs_url=None, redoc_url=None)
+app = FastAPI(title="GHoSt Terminal", version="1.0.2", docs_url=None, redoc_url=None)
 
 
 @app.get("/")
@@ -1339,9 +1352,16 @@ def _chat_completion_args(req: ChatRequest, messages: List[Dict[str, Any]]) -> d
     if chosen_seed is None:
         chosen_seed = secrets.randbelow(2**31 - 1) + 1
 
+    resolved_max_tokens = req.max_tokens
+    if resolved_max_tokens is None and req.max_completion_tokens is not None:
+        resolved_max_tokens = req.max_completion_tokens
+    if resolved_max_tokens is None:
+        stored_max_tokens = settings.get("max_tokens")
+        resolved_max_tokens = stored_max_tokens if stored_max_tokens is not None else 512
+
     args = {
         "messages": messages,
-        "max_tokens": int(pick("max_tokens", 512)),
+        "max_tokens": int(resolved_max_tokens),
         "temperature": float(pick("temperature", 0.7)),
         "top_p": float(pick("top_p", 0.95)),
         "min_p": float(pick("min_p", 0.05)),

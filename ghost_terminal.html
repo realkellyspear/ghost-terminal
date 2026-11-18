@@ -367,7 +367,8 @@
             </div>
             <div class="control-group">
                 <label for="context-size">Context Length</label>
-                <input type="number" id="context-size" min="512" max="32768" step="512" value="8192">
+                <input type="number" id="context-size" min="512" max="262144" step="1" value="8192">
+                <small>Range: 512&ndash;262,144 tokens (VRAM &amp; model permitting). Use CHECK FIT to verify.</small>
                 <label for="chat-format" style="margin-top: 6px;">Chat Template</label>
                 <select id="chat-format">
                     <option value="auto">Auto (use GGUF metadata)</option>
@@ -423,7 +424,7 @@
         <div class="control-grid">
             <div class="control-group">
                 <label for="max-tokens">Maximum Response Tokens</label>
-                <input type="number" id="max-tokens" min="1" max="8192" step="64" value="512">
+                <input type="number" id="max-tokens" min="1" max="32768" step="1" value="512">
             </div>
             <div class="control-group">
                 <label for="seed">Seed (optional)</label>
@@ -460,11 +461,34 @@
 
     const el = id => document.getElementById(id);
 
+    function extractApiError(data, status) {
+        const detail = data && data.detail;
+        if (Array.isArray(detail)) {
+            const messages = detail.map(item => {
+                if (typeof item === "string") return item;
+                if (item && typeof item === "object") {
+                    const loc = Array.isArray(item.loc)
+                        ? item.loc.filter(part => part !== "body").join(".")
+                        : "";
+                    const msg = item.msg || JSON.stringify(item);
+                    return loc ? `${loc}: ${msg}` : msg;
+                }
+                return String(item);
+            }).filter(Boolean);
+            if (messages.length) return messages.join("; ");
+        } else if (typeof detail === "string" && detail) {
+            return detail;
+        } else if (detail && typeof detail === "object") {
+            return detail.message || JSON.stringify(detail);
+        }
+        return (data && data.error) || `Request failed (${status})`;
+    }
+
     async function api(path, options = {}) {
         const response = await fetch(`${API}${path}`, options);
         const data = await response.json().catch(() => ({}));
         if (!response.ok) {
-            throw new Error(data.detail || data.error || `Request failed (${response.status})`);
+            throw new Error(extractApiError(data, response.status));
         }
         return data;
     }
@@ -596,8 +620,11 @@
                 ? "CPU-only fallback"
                 : `${plan.n_gpu_layers}/${plan.total_layers} layers on GPU`;
             const gib = bytes => (bytes / (1024 ** 3)).toFixed(2);
+            const maxCtxNote = plan.model_context_length
+                ? ` · ${plan.model_context_length.toLocaleString()} max model ctx`
+                : "";
             const details = [
-                `${plan.architecture} · ${plan.quantization} · ${plan.parameter_count.toLocaleString()} parameters`,
+                `${plan.architecture} · ${plan.quantization} · ${plan.parameter_count.toLocaleString()} parameters${maxCtxNote}`,
                 `${plan.weight_gib.toFixed(2)} GiB weights · ${gib(plan.kv_cache_estimate_bytes)} GiB est. KV/state · ${gib(plan.compute_reserve_bytes)} GiB compute reserve`,
                 `KV cache: ${plan.kv_cache_type} (${plan.kv_method}) · Flash Attn: ${plan.flash_attn ? "ON" : "OFF"}`,
                 `${offload} · ${plan.gpu_name || "NVIDIA GPU unavailable"}`
@@ -905,7 +932,7 @@
             });
             if (!res.ok) {
                 const err = await res.json().catch(() => ({}));
-                throw new Error(err.detail || `TTS failed (${res.status})`);
+                throw new Error(extractApiError(err, res.status));
             }
             const wavBlob = await res.blob();
             if (controller.signal.aborted) return;
@@ -1084,7 +1111,7 @@
             });
             if (!response.ok) {
                 const error = await response.json().catch(() => ({}));
-                throw new Error(error.detail || error.error || `Request failed (${response.status})`);
+                throw new Error(extractApiError(error, response.status));
             }
             if (!response.body) throw new Error("The server did not provide a streaming response.");
             const reader = response.body.getReader();
